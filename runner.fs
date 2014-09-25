@@ -64,6 +64,73 @@ module VirtualBox =
 
         logger.Info(sprintf "Deleted VM %s" name)
 
+module DriveManager =
+    open NLog
+    let logger = LogManager.GetLogger("DriveManager")
+
+    type Partition = {device:string; size:string; filesystem:string}
+    type Drive = {device:string; size:string; name:string; partitions:Partition list}
+
+    let parseDrive (lines:string list) =
+        let lines' =
+            match lines with  // We don't need the first line of the parted output
+            | x::xs when x = "BYT;" -> xs
+            | _ -> lines
+
+        let driveLine = List.head lines'
+        let partitionLines = List.tail lines'
+
+        logger.Debug(sprintf "Parsing drive: %s" driveLine)
+
+        let drive =
+            let splits = driveLine.Split(':')
+            {
+                Drive.device = splits.[0];
+                size = splits.[1];
+                name = splits.[6];
+                partitions = []
+            }
+
+        let partitions =
+            partitionLines
+            |> List.map (fun partitionLine ->
+                logger.Debug(sprintf "Parsing partition: %s" partitionLine)
+                let splits = partitionLine.Split(':')
+                {
+                    Partition.device = drive.device + splits.[0];
+                    size = splits.[3];
+                    filesystem = splits.[4]
+                }
+            )
+
+        {drive with partitions=partitions}
+
+    let parseDrives (driveList:string) =
+        driveList.Split([|System.Environment.NewLine|], System.StringSplitOptions.None)
+        |> List.ofArray
+        |> List.fold (fun drives line ->
+            let (current, done_) =
+                match drives with
+                | [] -> ([], [])
+                | x::xs -> (x,xs)
+
+            match line with
+            | "" -> []::current::done_  // End of current drive. Prepend a new one to the list.
+            | _ -> (List.append current [line])::done_
+        ) []
+        |> List.map parseDrive
+
+    let getDrives () =
+        CLI.runCmd "parted -lm"
+        |> (fun res ->
+            match res with
+            | CLI.Failure(err,_) ->
+                logger.Fatal(sprintf "Could not list drives!\n\n%s" err)
+                []
+            | CLI.Success output ->
+                parseDrives output
+        )
+
 module main =
     open NLog
     LoggerConfig.setLogLevel LogLevel.Debug
@@ -72,5 +139,7 @@ module main =
     [<EntryPoint>]
     let main args =
         VirtualBox.createVM "runner"
+        DriveManager.getDrives()
+        |> printfn "%A"
         VirtualBox.deleteVM "runner"
         0
