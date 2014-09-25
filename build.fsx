@@ -14,6 +14,7 @@ Target "Clean" (fun _ ->
 // Default target
 Target "Default" (fun _ ->
     let references = [
+        "tools/NLog/lib/net45/NLog.dll";
     ]
 
     ["runner.fs"]
