@@ -68,8 +68,18 @@ module DriveManager =
     open NLog
     let logger = LogManager.GetLogger("DriveManager")
 
-    type Partition = {device:string; size:string; filesystem:string}
-    type Drive = {device:string; size:string; name:string; partitions:Partition list}
+    type IDevice =
+        abstract member device: string
+
+    type Partition =
+        {device:string; size:string; filesystem:string}
+        interface IDevice with
+            member this.device = this.device
+
+    type Drive =
+        {device:string; size:string; name:string; partitions:Partition list}
+        interface IDevice with
+            member this.device = this.device
 
     let parseDrive (lines:string list) =
         let lines' =
@@ -133,13 +143,36 @@ module DriveManager =
 
 module main =
     open NLog
+    open DriveManager
+
     LoggerConfig.setLogLevel LogLevel.Debug
     let logger = LogManager.GetLogger("main")
+
+    let rec promptDevices devices =
+        devices
+            |> List.iteri (fun i (name, _) -> printfn "%i\t%s" i name)
+
+        printfn "Which device do you want to use? (comma separated list)"
+        let selection = System.Console.ReadLine()
+
+        match (System.Int32.TryParse(selection)) with
+        | (true, i) when i < List.length devices -> devices.[i]
+        | (false, _)
+        | _ ->
+            printfn "You must select at least one device"
+            promptDevices devices
 
     [<EntryPoint>]
     let main args =
         VirtualBox.createVM "runner"
-        DriveManager.getDrives()
-        |> printfn "%A"
+        let allDrives = DriveManager.getDrives()
+        let selectedDrive =
+            allDrives
+            |> List.map (fun drive -> (
+                sprintf "%s\t(%s, %s)" drive.device drive.size drive.name,
+                drive
+            ))
+            |> promptDevices
+        printfn "%A" selectedDrive
         VirtualBox.deleteVM "runner"
         0
