@@ -147,12 +147,27 @@ module VirtualBox =
 
         logger.Info(sprintf "Deleted VM %s" name)
 
-    let mountSpinRite name (partition:Partition) =
-        let mountpoint = "/mnt/spinrite"
-        let spinRiteFile = Path.Combine(mountpoint, "spinrite.iso")
+    let private acquireSpinriteISO (partition:Partition) =
+        let mountpoint = "/tmp/spinmount"
+        let spinRiteFileName = "spinrite.iso"
+        let spinRiteFile= Path.Combine("/tmp", spinRiteFileName)
+
+        match File.Exists(spinRiteFile) with
+        | true -> File.Delete spinRiteFile |> ignore
+        | false -> ()
 
         Directory.CreateDirectory(mountpoint) |> ignore
         CLI.runCmd @@ sprintf "sudo mount %s %s" partition.device mountpoint
+
+        File.Copy(Path.Combine(mountpoint, spinRiteFileName), spinRiteFile)
+
+        CLI.runCmd @@ sprintf "sudo umount %s" mountpoint
+        Directory.Delete(mountpoint) |> ignore
+
+        spinRiteFile
+
+    let mountSpinRite name (partition:Partition) =
+        let spinRiteFile = acquireSpinriteISO partition
 
         CLI.runCmd @@ sprintf "VBoxManage storagectl '%s' --name 'IDE Controller' --add ide" name
         CLI.runCmd @@ sprintf "VBoxManage storageattach '%s' --storagectl 'IDE Controller' --port 0 --device 0 --type dvddrive --medium %s" name spinRiteFile
