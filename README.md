@@ -13,4 +13,4 @@ Install Mono and F#, then run `./fakebuild.sh`.
 
 You'll also need to nuget install the FAKE build tool - eventually I may get around to making that easy. In the meantime, find a copy of nuget.exe and run
 
-`mono --runtime=v4.0 $NW/nuget.exe install fake -OutputDirectory tools -ExcludeVersion`
+`mono --runtime=v4.0 nuget.exe install fake -OutputDirectory tools -ExcludeVersion`
