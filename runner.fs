@@ -152,7 +152,7 @@ module main =
         devices
             |> List.iteri (fun i (name, _) -> printfn "%i\t%s" i name)
 
-        printfn "Which device do you want to use? (comma separated list)"
+        printfn "Which device do you want to use?"
         let selection = System.Console.ReadLine()
 
         match (System.Int32.TryParse(selection)) with
@@ -168,9 +168,11 @@ module main =
         let allDrives = DriveManager.getDrives()
         let selectedDrive =
             allDrives
-            |> List.map (fun drive -> (
-                sprintf "%s\t(%s, %s)" drive.device drive.size drive.name,
-                drive
+            |> List.map (fun drive -> drive.partitions)
+            |> List.concat
+            |> List.map (fun partition -> (
+                sprintf "%s\t(%s, %s)" partition.device partition.size partition.filesystem,
+                partition
             ))
             |> promptDevices
         printfn "%A" selectedDrive
