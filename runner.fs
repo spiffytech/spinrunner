@@ -48,22 +48,6 @@ module CLI =
         | 0 -> Success output
         | _ -> Failure (output, proc.ExitCode)
 
-module VirtualBox =
-    open NLog
-    let logger = LogManager.GetLogger("VirtualBox")
-
-    let createVM name =
-        CLI.runCmd @@ sprintf "VBoxManage createvm --name '%s' --register" name
-        |> printfn "%A"
-
-        logger.Info(sprintf "Created VM %s" name)
-
-    let deleteVM name =
-        CLI.runCmd @@ sprintf "VBoxManage unregistervm '%s' --delete" name
-        |> printfn "%A"
-
-        logger.Info(sprintf "Deleted VM %s" name)
-
 module DriveManager =
     open NLog
     let logger = LogManager.GetLogger("DriveManager")
@@ -141,6 +125,33 @@ module DriveManager =
                 parseDrives output
         )
 
+module VirtualBox =
+    open System.IO
+    open DriveManager
+    open NLog
+    let logger = LogManager.GetLogger("VirtualBox")
+
+    let createVM name =
+        CLI.runCmd @@ sprintf "VBoxManage createvm --name '%s' --register" name
+        |> printfn "%A"
+
+        logger.Info(sprintf "Created VM %s" name)
+
+    let deleteVM name =
+        CLI.runCmd @@ sprintf "VBoxManage unregistervm '%s' --delete" name
+        |> printfn "%A"
+
+        logger.Info(sprintf "Deleted VM %s" name)
+
+    let mountSpinRite name (partition:Partition) =
+        let mountpoint = "/mnt/spinrite"
+        let spinRiteFile = Path.Combine(mountpoint, "spinrite.iso")
+
+        Directory.CreateDirectory(mountpoint) |> ignore
+        CLI.runCmd @@ sprintf "mount %s %s" partition.device mountpoint
+
+        CLI.runCmd @@ sprintf "VBoxManage storageattach 'io' --storagectl 'IDE Controller' --port 0 --device 0 --type dvddrive --medium %s" spinRiteFile
+
 module main =
     open NLog
     open DriveManager
@@ -156,7 +167,9 @@ module main =
         let selection = System.Console.ReadLine()
 
         match (System.Int32.TryParse(selection)) with
-        | (true, i) when i < List.length devices -> devices.[i]
+        | (true, i) when i < List.length devices ->
+            devices.[i]
+            |> (fun (_, device) -> device)
         | (false, _)
         | _ ->
             printfn "You must select at least one device"
@@ -164,17 +177,21 @@ module main =
 
     [<EntryPoint>]
     let main args =
-        VirtualBox.createVM "runner"
+        let vmName = "runner"
+        VirtualBox.createVM vmName
         let allDrives = DriveManager.getDrives()
-        let selectedDrive =
+        let selectedPartition =
             allDrives
             |> List.map (fun drive -> drive.partitions)
             |> List.concat
-            |> List.map (fun partition -> (
-                sprintf "%s\t(%s, %s)" partition.device partition.size partition.filesystem,
-                partition
-            ))
+            |> List.map (fun partition ->
+                (
+                    sprintf "%s\t(%s, %s)" partition.device partition.size partition.filesystem,
+                    partition
+                )
+            )
             |> promptDevices
-        printfn "%A" selectedDrive
-        VirtualBox.deleteVM "runner"
+        selectedPartition
+            |> VirtualBox.mountSpinRite vmName
+        VirtualBox.deleteVM vmName
         0
