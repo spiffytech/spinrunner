@@ -115,7 +115,7 @@ module DriveManager =
         |> List.map parseDrive
 
     let getDrives () =
-        CLI.runCmd "parted -lm"
+        CLI.runCmd "sudo parted -lm"
         |> (fun res ->
             match res with
             | CLI.Failure(err,_) ->
@@ -132,14 +132,18 @@ module VirtualBox =
     let logger = LogManager.GetLogger("VirtualBox")
 
     let createVM name =
-        CLI.runCmd @@ sprintf "VBoxManage createvm --name '%s' --register" name
-        |> printfn "%A"
+        let couldCreate = CLI.runCmd @@ sprintf "VBoxManage createvm --name '%s' --register" name
+        match couldCreate with
+        | CLI.Success _ -> ()
+        | CLI.Failure (msg,_) -> logger.Fatal(sprintf "Could not create VM: %s" msg)
 
         logger.Info(sprintf "Created VM %s" name)
 
     let deleteVM name =
-        CLI.runCmd @@ sprintf "VBoxManage unregistervm '%s' --delete" name
-        |> printfn "%A"
+        let couldDelete = CLI.runCmd @@ sprintf "VBoxManage unregistervm '%s' --delete" name
+        match couldDelete with
+        | CLI.Success _ -> ()
+        | CLI.Failure (msg,_) -> logger.Error(sprintf "Could not delete VM: %s" msg)
 
         logger.Info(sprintf "Deleted VM %s" name)
 
@@ -148,9 +152,43 @@ module VirtualBox =
         let spinRiteFile = Path.Combine(mountpoint, "spinrite.iso")
 
         Directory.CreateDirectory(mountpoint) |> ignore
-        CLI.runCmd @@ sprintf "mount %s %s" partition.device mountpoint
+        CLI.runCmd @@ sprintf "sudo mount %s %s" partition.device mountpoint
 
-        CLI.runCmd @@ sprintf "VBoxManage storageattach 'io' --storagectl 'IDE Controller' --port 0 --device 0 --type dvddrive --medium %s" spinRiteFile
+        CLI.runCmd @@ sprintf "VBoxManage storagectl '%s' --name 'IDE Controller' --add ide" name
+        CLI.runCmd @@ sprintf "VBoxManage storageattach '%s' --storagectl 'IDE Controller' --port 0 --device 0 --type dvddrive --medium %s" name spinRiteFile
+
+    let startVM name =
+        logger.Info("Starting VM")
+        let status = CLI.runCmd @@ sprintf "VBoxManage startvm %s --type gui" name
+
+        match status with
+        | CLI.Failure (msg, _) -> logger.Fatal(sprintf "Error starting VM: %s" msg)
+        | _ -> ()
+
+    let rec waitForClose name =
+        let vmDetails = CLI.runCmd @@ sprintf "VBoxManage showvminfo %s --machinereadable" name
+        match vmDetails with
+        | CLI.Failure _ -> ()
+        | CLI.Success vmDetails ->
+            let status =
+                vmDetails.Split([|System.Environment.NewLine|], System.StringSplitOptions.None)
+                |> List.ofArray
+                |> List.map (fun detail -> detail.Split([|'='|]))
+                |> List.find (fun detail ->
+                    detail.[0] = "VMState"
+                )
+                |> (fun detail -> detail.[1].Trim([|'"'|]))
+
+            match status with
+            | "running"
+            | "paused" ->
+                logger.Debug("Waiting for VM to close")
+                System.Threading.Thread.Sleep 3000
+                waitForClose name
+            | _ ->
+                logger.Debug(sprintf "VM status: %s" status)
+                logger.Debug("VM has closed")
+                ()
 
 module main =
     open NLog
@@ -193,5 +231,8 @@ module main =
             |> promptDevices
         selectedPartition
             |> VirtualBox.mountSpinRite vmName
+
+        VirtualBox.startVM vmName
+        VirtualBox.waitForClose vmName
         VirtualBox.deleteVM vmName
         0
