@@ -36,17 +36,24 @@ module CLI =
         proc.StartInfo.RedirectStandardError <- true
         proc.Start() |> ignore
 
-        // Capture output
-        let sb = new System.Text.StringBuilder()
+        // Capture stdout
+        let sbOut = new System.Text.StringBuilder()
         while not proc.HasExited do
-            sb.Append(proc.StandardOutput.ReadToEnd()) |> ignore
-        sb.Append(proc.StandardOutput.ReadToEnd()) |> ignore  // Do it again in case the process exits so quickly we never enter the loop
+            sbOut.Append(proc.StandardOutput.ReadToEnd()) |> ignore
+        sbOut.Append(proc.StandardOutput.ReadToEnd()) |> ignore  // Do it again in case the process exits so quickly we never enter the loop
+        let output = sbOut.ToString().Trim()
 
-        let output = sb.ToString().Trim()
+        // Capture stderr
+        let sbErr = new System.Text.StringBuilder()
+        while not proc.HasExited do
+            sbErr.Append(proc.StandardError.ReadToEnd()) |> ignore
+        sbErr.Append(proc.StandardError.ReadToEnd()) |> ignore  // Do it again in case the process exits so quickly we never enter the loop
+
+        let output' = output + sbErr.ToString().Trim()
 
         match proc.ExitCode with
         | 0 -> Success output
-        | _ -> Failure (output, proc.ExitCode)
+        | _ -> Failure (output', proc.ExitCode)
 
 module DriveManager =
     open NLog
@@ -172,6 +179,35 @@ module VirtualBox =
         CLI.runCmd @@ sprintf "VBoxManage storagectl '%s' --name 'IDE Controller' --add ide" name
         CLI.runCmd @@ sprintf "VBoxManage storageattach '%s' --storagectl 'IDE Controller' --port 0 --device 0 --type dvddrive --medium %s" name spinRiteFile
 
+    let attachDrives name (drives:Drive list) =
+        let baseIndex = 1  // index 0 is the SpinRite boot disk
+        drives
+            |> List.mapi (fun i drive ->
+                let portIndex = i + baseIndex
+                let rawDirectory = "/tmp/rawDisks"
+                Directory.CreateDirectory(rawDirectory) |> ignore
+                let filename = sprintf "%s.vmdk" @@ Path.Combine(rawDirectory, drive.device.Replace("/", "-"))
+
+                let status = CLI.runCmd @@ sprintf "sudo VBoxManage internalcommands createrawvmdk -filename %s -rawdisk %s" filename drive.device
+                match status with
+                | CLI.Failure (msg,_) -> logger.Fatal(sprintf "Could not attach raw disk %s: %s" drive.device msg)
+                | CLI.Success _ ->
+                    CLI.runCmd @@ sprintf "sudo chmod go+rw %s" filename
+                    let couldAttachDisk = CLI.runCmd @@ sprintf "VBoxManage storageattach '%s' --storagectl 'IDE Controller' --port %d --device 0 --type dvddrive --medium %s" name portIndex filename
+                    match couldAttachDisk with
+                    | CLI.Failure (msg,_) -> logger.Error(sprintf "Could not attach raw disk %s: %s" filename msg)
+                    | CLI.Success _ -> ()
+
+                filename
+            )
+
+    let cleanUpRawDisks rawDisks =
+        rawDisks
+            |> List.iter (fun rawDisk ->
+                File.Delete rawDisk
+                logger.Info(sprintf "Cleaned up raw disk file %s" rawDisk)
+            )
+
     let startVM name =
         logger.Info("Starting VM")
         let status = CLI.runCmd @@ sprintf "VBoxManage startvm %s --type gui" name
@@ -195,15 +231,15 @@ module VirtualBox =
                 |> (fun detail -> detail.[1].Trim([|'"'|]))
 
             match status with
-            | "running"
-            | "paused" ->
-                logger.Debug("Waiting for VM to close")
-                System.Threading.Thread.Sleep 3000
-                waitForClose name
-            | _ ->
+            | "poweroff"
+            | "saved" ->
                 logger.Debug(sprintf "VM status: %s" status)
                 logger.Debug("VM has closed")
                 ()
+            | status ->
+                logger.Debug(sprintf "Waiting for VM to close. VM status is %s." status)
+                System.Threading.Thread.Sleep 3000
+                waitForClose name
 
 module main =
     open NLog
@@ -247,7 +283,12 @@ module main =
         selectedPartition
             |> VirtualBox.mountSpinRite vmName
 
+        let rawDisks =
+            allDrives
+            |> VirtualBox.attachDrives vmName
+
         VirtualBox.startVM vmName
         VirtualBox.waitForClose vmName
         VirtualBox.deleteVM vmName
+        VirtualBox.cleanUpRawDisks rawDisks
         0
