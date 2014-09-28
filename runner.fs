@@ -139,7 +139,7 @@ module VirtualBox =
     let logger = LogManager.GetLogger("VirtualBox")
 
     let createVM name =
-        let couldCreate = CLI.runCmd @@ sprintf "VBoxManage createvm --name '%s' --register" name
+        let couldCreate = CLI.runCmd @@ sprintf "sudo VBoxManage createvm --name '%s' --register" name
         match couldCreate with
         | CLI.Success _ -> ()
         | CLI.Failure (msg,_) -> logger.Fatal(sprintf "Could not create VM: %s" msg)
@@ -147,7 +147,7 @@ module VirtualBox =
         logger.Info(sprintf "Created VM %s" name)
 
     let deleteVM name =
-        let couldDelete = CLI.runCmd @@ sprintf "VBoxManage unregistervm '%s' --delete" name
+        let couldDelete = CLI.runCmd @@ sprintf "sudo VBoxManage unregistervm '%s' --delete" name
         match couldDelete with
         | CLI.Success _ -> ()
         | CLI.Failure (msg,_) -> logger.Error(sprintf "Could not delete VM: %s" msg)
@@ -176,8 +176,8 @@ module VirtualBox =
     let mountSpinRite name (partition:Partition) =
         let spinRiteFile = acquireSpinriteISO partition
 
-        CLI.runCmd @@ sprintf "VBoxManage storagectl '%s' --name 'IDE Controller' --add ide" name
-        CLI.runCmd @@ sprintf "VBoxManage storageattach '%s' --storagectl 'IDE Controller' --port 0 --device 0 --type dvddrive --medium %s" name spinRiteFile
+        CLI.runCmd @@ sprintf "sudo VBoxManage storagectl '%s' --name 'SATA Controller' --add sata" name
+        CLI.runCmd @@ sprintf "sudo VBoxManage storageattach '%s' --storagectl 'SATA Controller' --port 0 --device 0 --type dvddrive --medium %s" name spinRiteFile
 
     let attachDrives name (drives:Drive list) =
         let baseIndex = 1  // index 0 is the SpinRite boot disk
@@ -186,14 +186,14 @@ module VirtualBox =
                 let portIndex = i + baseIndex
                 let rawDirectory = "/tmp/rawDisks"
                 Directory.CreateDirectory(rawDirectory) |> ignore
-                let filename = sprintf "%s.vmdk" @@ Path.Combine(rawDirectory, drive.device.Replace("/", "-"))
+                let filename = sprintf "%s.vmdk" @@ Path.Combine(rawDirectory, drive.device.Replace("/", "_"))
 
                 let status = CLI.runCmd @@ sprintf "sudo VBoxManage internalcommands createrawvmdk -filename %s -rawdisk %s" filename drive.device
                 match status with
                 | CLI.Failure (msg,_) -> logger.Fatal(sprintf "Could not attach raw disk %s: %s" drive.device msg)
                 | CLI.Success _ ->
                     CLI.runCmd @@ sprintf "sudo chmod go+rw %s" filename
-                    let couldAttachDisk = CLI.runCmd @@ sprintf "VBoxManage storageattach '%s' --storagectl 'IDE Controller' --port %d --device 0 --type dvddrive --medium %s" name portIndex filename
+                    let couldAttachDisk = CLI.runCmd @@ sprintf "sudo VBoxManage storageattach '%s' --storagectl 'SATA Controller' --port %d --device 0 --type hdd --medium %s" name portIndex filename
                     match couldAttachDisk with
                     | CLI.Failure (msg,_) -> logger.Error(sprintf "Could not attach raw disk %s: %s" filename msg)
                     | CLI.Success _ -> ()
@@ -210,14 +210,14 @@ module VirtualBox =
 
     let startVM name =
         logger.Info("Starting VM")
-        let status = CLI.runCmd @@ sprintf "VBoxManage startvm %s --type gui" name
+        let status = CLI.runCmd @@ sprintf "sudo VBoxManage startvm %s --type gui" name
 
         match status with
         | CLI.Failure (msg, _) -> logger.Fatal(sprintf "Error starting VM: %s" msg)
         | _ -> ()
 
     let rec waitForClose name =
-        let vmDetails = CLI.runCmd @@ sprintf "VBoxManage showvminfo %s --machinereadable" name
+        let vmDetails = CLI.runCmd @@ sprintf "sudo VBoxManage showvminfo %s --machinereadable" name
         match vmDetails with
         | CLI.Failure _ -> ()
         | CLI.Success vmDetails ->
